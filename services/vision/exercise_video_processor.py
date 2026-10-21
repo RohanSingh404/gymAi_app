@@ -4,6 +4,7 @@ import av
 import numpy as np
 import mediapipe as mp
 import threading
+import logging
 from streamlit_webrtc import VideoProcessorBase
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
@@ -14,6 +15,8 @@ from detectors.shoulder_press import ShoulderPressDetector
 from detectors.lunges import LungesDetector
 from services.config.workout_config import POSE_CONNECTIONS
 
+
+logger = logging.getLogger(__name__)
 
 class VideoProcessorClass(VideoProcessorBase):
     def __init__(self):
@@ -188,40 +191,39 @@ class VideoProcessorClass(VideoProcessorBase):
             2,
         )
 
-    def recv(self, frame):
-        image = np.asarray(
-            cv2.flip(frame.to_ndarray(format="bgr24"), 1),
-            dtype=np.uint8
-        )
+    
+def recv(self, frame):
+    original = frame.to_ndarray(format="bgr24")
+
+    try:
+        image = cv2.flip(original, 1)
 
         mp_image = mp.Image(
             image_format=mp.ImageFormat.SRGB,
-            data=cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+            data=cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         )
 
         self._frame_timestamps_ms += 30
-        result = self._landmarker.detect_for_video(mp_image, self._frame_timestamps_ms)
+        result = self._landmarker.detect_for_video(
+            mp_image,
+            self._frame_timestamps_ms
+        )
 
         if result.pose_landmarks:
             landmarks = result.pose_landmarks[0]
-
             self._draw_skeleton(image, landmarks)
 
             ex_type = self.get_exercise()
-
             detector = self._detectors.get(ex_type)
 
             if detector:
                 metrics = detector.process(landmarks)
-
                 metrics["pose_detected"] = True
-
                 self._draw_overlays(image, metrics, ex_type)
-
                 self.set_latest_metrics(metrics)
         else:
             self._draw_no_pose_warnings(image)
-            
+
             with self._lock:
                 if self._latest_metrics is not None:
                     self._latest_metrics["pose_detected"] = False
@@ -229,4 +231,7 @@ class VideoProcessorClass(VideoProcessorBase):
                     self._latest_metrics = {"pose_detected": False}
 
         return av.VideoFrame.from_ndarray(image, format="bgr24")
-    
+
+    except Exception:
+        logger.exception("Video frame processing failed")
+        return av.VideoFrame.from_ndarray(original, format="bgr24")
